@@ -1,0 +1,12 @@
+1. Analysis_brief = PDF briefly explaining the analysis made in this study. PDF were generated in RMarkdown.
+2. biogeo_modelsRMD.rmd = RMD code for running all the analysis in this study (running in R platform).
+3. biogeo3.txt = dataframe for modeling nectar-producing proportion and biogeographical variables (e.g., latitude and altitude).
+4. correl.txt = dataframe for correlating proportion of nectar-producing plants and floral resource diversity.
+5. Dataset Macroecological approach - Ballarin et al. = dataset containing biogeographical and enviromental information of all studied plant communities as well as all plant species sampled in these communities.
+6. Dataset Taxonomical approach - Ballarin et al. = dataset containing all plant species sampled in this studied. They are divide per angiosperm family. The rationale fo assessing animal-pollinated plants that produce nectar is also included.
+7. divrec_fixed3.txt = dataframe for modeling floral resource diversity and biogeographical variables (e.g., latitude and altitude).
+8. environmental_divrec.txt = dataframe for modeling floral resource diversity and environmental variables (e.g., annual mean temperature and annual precipitation).
+9. environmental_models2.txt = dataframe for modeling nectar-producing proportion and environmental variables (e.g., annual mean temperature and annual precipitation).
+10. Global_Map_construction.txt = dataframe for plotting sampled species and communities in the worldmap.
+11. propreg2.txt = dataframe for plotting the proportion of nectar producing plants in communities divided into climatic zones.
+

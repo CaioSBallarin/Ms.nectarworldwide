@@ -1,0 +1,2070 @@
+---
+title: "Global Nectar Distribution"
+author: "Caio S. Ballarin; Francisco E. Fontúrbel; Felipe W. Amorim"
+date: "19/03/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Evaluating biogeographical trends among floral nectar-producing plant communities
+
+This file contains the code to reproduce the statistical analyses presented in the paper.
+
+```{r data, message=FALSE, warning=FALSE, include=FALSE}
+##Libraries
+require(corrplot)
+require(gamm4)
+require(lme4)
+require(cAIC4)
+require(MuMIn)
+require(corrplot)
+require(ggplot2)
+require(car)
+require(mgcv)
+require(mgcv.helper)
+require(mgcViz)
+require(ncf)
+require(mpmcorrelogram)
+require(knitr)
+require(maps)
+
+
+##Loading data
+biogeo <- read.table("biogeo3.txt", header = T, sep = "\t")
+```
+
+
+# 1. **Relationship among the proportion of nectar-producing plants in communities worldwide and biogeographical variables** 
+
+### Correlation among response variables
+
+First we will check if there is correlation between the numeric independent variables
+
+##### **They are:** Latitude, Longitude, Altitude and Plant richness (how many plant species in each plant community sampled)
+
+
+
+
+
+```{r corr,  echo=FALSE, message=FALSE, warning=FALSE, fig.align="center"}
+correlations <- cor(biogeo[,2:5])
+corrplot(correlations, method="circle")
+```
+
+As can be seen here, there are low levels of both negative and positive correlation between these variables. It should be expected, since we sampled several plant communities around the world not following any pre-established gradient. See the map:
+
+
+```{r map_Prop1, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+Totalmap<-read.table("Global_Map_construction.txt", header = T)
+
+Totalmap$Sampling <- factor(Totalmap$Sampling, 
+                            levels = c("Species", "Community"))
+
+world_map <- map_data("world")
+
+ggplot() + coord_fixed() +
+  xlab("") + ylab("")+
+  geom_polygon(data=world_map, aes(x=long, y=lat, group=group), colour="khaki3", fill="khaki3")+
+  geom_point(data = Totalmap, 
+             aes(x=Long, y=Lat, color = Sampling, shape = Sampling), 
+             alpha = 0.7, size = 2.95)+
+  theme(axis.text = element_text(size=12),
+        axis.title=element_text(size=22), legend.position = "right",
+        legend.title = element_text(size=16), legend.text = element_text(size = 12))+
+  scale_color_manual(values = c("gray16", "red"), name  ="", labels = c("Sampled species", "Sampled communities"))+ 
+  scale_shape_manual(values = c(19, 17), name ="", labels = c("Sampled species", "Sampled communities"))+
+  scale_y_continuous(breaks=c(-60, -23.5, 0, 23.5, 60))+
+  scale_x_continuous(breaks=c(-180, -90, -30, 0, 30, 90, 180))+
+  geom_hline(yintercept=-23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=0, linetype="dotted", 
+             color = "gray42", size=0.3)+
+  theme(legend.position = c(0.125, 0.215),
+        legend.box = "horizontal",
+        legend.background = element_blank(),
+        legend.text = element_text(size=15))+
+  guides(color = guide_legend(override.aes = list(size = 4.05)))
+
+
+
+```
+
+
+
+Before running the models, let's check how the proportion of nectar-producing plants in communities worldwide is expressed by dividing plant communities into climatic zones.
+
+```{r box_climatic_zones, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+require(ggplot2)
+
+propreg <- read.table("propreg2.txt", header = T)
+ggplot(propreg, aes(x=zone, y=prop, fill=zone))+
+  geom_violin(width = 0.9, alpha=0.825)+
+  geom_boxplot(width = 0.15, color = "gray25", alpha = 0.2)+
+  scale_fill_manual(values=c("chartreuse4", "gold2", "cadetblue3","antiquewhite3"))+
+  labs(x = "Climatic zone", y = "Proportion of\nnectar-producing plants", color = "Ambiente")+
+  scale_x_discrete(name="Climatic zone", labels = c("Tropical","Subtropical", "Temperate", "Arctic"))+
+  theme_classic(base_size = 12.5,
+                base_family = "",)+
+  theme(legend.position="none")+
+  theme(axis.text.x=element_text(size=14),axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=14),axis.title.y=element_text(size=18),
+        plot.title=element_text(size=16, face="bold", color="black"))+
+  geom_jitter(shape=16,size=1.5, position=position_jitter(0.1), alpha = 0.3)+
+      theme(axis.title = element_text(size=24), panel.background = element_blank())
+
+
+
+```
+
+It looks like tropical communities have a lower proportion of nectar-producing plants. Also it seems that there is a trend of increasing the proportion of nectar-producing plants following high latitudes.  
+
+
+## Models
+
+Now, we will check if some biogeographical variables are related with the proportion of nectar-producing plants in natural plant communities.
+
+For these purpose we used the following variables
+
+##### Latitude, Altitude, Plant richness, Insularity, Biome (according to Whittaker, 1962) and Sampling effort
+
+### GAMM models
+
+We will use Generalized Aditive Mixed Models (GAMM) with the function `gamm4`.
+
+
+We made 105 candidates models by combining the fixed factor, namely, Latitude, Altitude, Insularity and Biome and also combining the random effects, namely, Plant richness, Biome and Sampling effort
+
+##### **Transformation**  
+
+We first transformed our response variable (proportion of nectar-producing plants) to conform to a normal distribution
+
+
+```{r transform, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+propC<-log(biogeo$prop/(1-biogeo$prop))
+
+hist.plot <- ggplot(data=biogeo, aes(propC)) + 
+  geom_histogram()+
+  scale_x_continuous(name="Transformed proportion of \n nectar-producing plants")+
+  scale_y_continuous(name="Frequency")
+
+hist.plot
+
+```
+
+
+## Multi-model inference
+
+We ran seven possible models for 15 model structures, giving a total of 105 candidate models (not shown in the output).
+
+
+```{r gammodels, message=FALSE, warning=FALSE, include=FALSE}
+
+#####lat#####
+m1a <- gamm4(propC ~ s(lat), random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m1b <- gamm4(propC ~ s(lat), random=~(1|effort), REML=TRUE, data = biogeo)
+
+m1c <- gamm4(propC ~ s(lat), random=~(1|biome), REML=TRUE, data = biogeo)
+
+m1d <- gamm4(propC ~ s(lat), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m1e <- gamm4(propC ~ s(lat), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m1f <- gamm4(propC ~ s(lat), random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m1g <- gamm4(propC ~ s(lat), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####alt#####
+
+m2a <- gamm4(propC ~ s(alt), random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m2b <- gamm4(propC ~ s(alt), random=~(1|effort), REML=TRUE, data = biogeo)
+
+m2c <- gamm4(propC ~ s(alt), random=~(1|biome), REML=TRUE, data = biogeo)
+
+m2d <- gamm4(propC ~ s(alt), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m2e <- gamm4(propC ~ s(alt), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m2f <- gamm4(propC ~ s(alt), random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m2g <- gamm4(propC ~ s(alt), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####insularity#####
+
+m3a <- gamm4(propC ~ insularity, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m3b <- gamm4(propC ~ insularity, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m3c <- gamm4(propC ~ insularity, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m3d <- gamm4(propC ~ insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m3e <- gamm4(propC ~ insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m3f <- gamm4(propC ~ insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m3g <- gamm4(propC ~ insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####biome#####
+
+m4a <- gamm4(propC ~ biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m4b <- gamm4(propC ~ biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m4c <- gamm4(propC ~ biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m4d <- gamm4(propC ~ biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m4e <- gamm4(propC ~ biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m4f <- gamm4(propC ~ biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m4g <- gamm4(propC ~ biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + alt#####
+
+m5a <- gamm4(propC ~ s(lat) + s(alt), random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m5b <- gamm4(propC ~ s(lat) + s(alt), random=~(1|effort), REML=TRUE, data = biogeo)
+
+m5c <- gamm4(propC ~ s(lat) + s(alt), random=~(1|biome), REML=TRUE, data = biogeo)
+
+m5d <- gamm4(propC ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m5e <- gamm4(propC ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m5f <- gamm4(propC ~ s(lat) + s(alt), random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m5g <- gamm4(propC ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + insularity#####
+
+m6a <- gamm4(propC ~ s(lat) + insularity, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m6b <- gamm4(propC ~ s(lat) + insularity, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m6c <- gamm4(propC ~ s(lat) + insularity, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m6d <- gamm4(propC ~ s(lat) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m6e <- gamm4(propC ~ s(lat) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m6f <- gamm4(propC ~ s(lat) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m6g <- gamm4(propC ~ s(lat) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + biome#####
+
+m7a <- gamm4(propC ~ s(lat) + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m7b <- gamm4(propC ~ s(lat) + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m7c <- gamm4(propC ~ s(lat) + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m7d <- gamm4(propC ~ s(lat) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m7e <- gamm4(propC ~ s(lat) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m7f <- gamm4(propC ~ s(lat) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m7g <- gamm4(propC ~ s(lat) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####alt + insularity#####
+
+m8a <- gamm4(propC ~ s(alt) + insularity, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m8b <- gamm4(propC ~ s(alt) + insularity, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m8c <- gamm4(propC ~ s(alt) + insularity, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m8d <- gamm4(propC ~ s(alt) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m8e <- gamm4(propC ~ s(alt) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m8f <- gamm4(propC ~ s(alt) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m8g <- gamm4(propC ~ s(alt) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####alt + biome#####
+
+m9a <- gamm4(propC ~ s(alt) + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m9b <- gamm4(propC ~ s(alt) + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m9c <- gamm4(propC ~ s(alt) + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m9d <- gamm4(propC ~ s(alt) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m9e <- gamm4(propC ~ s(alt) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m9f <- gamm4(propC ~ s(alt) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m9g <- gamm4(propC ~ s(alt) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####insularity + biome#####
+
+m10a <- gamm4(propC ~ insularity + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m10b <- gamm4(propC ~ insularity + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m10c <- gamm4(propC ~ insularity + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m10d <- gamm4(propC ~ insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m10e <- gamm4(propC ~ insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m10f <- gamm4(propC ~ insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m10g <- gamm4(propC ~ insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + alt + insularity#####
+
+m11a <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m11b <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m11c <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m11d <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m11e <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m11f <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m11g <- gamm4(propC ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + alt + biome#####
+
+m12a <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m12b <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m12c <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m12d <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m12e <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m12f <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m12g <- gamm4(propC ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + insularity + biome#####
+
+m13a <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m13b <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m13c <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m13d <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m13e <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m13f <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m13g <- gamm4(propC ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####alt + insularity + biome#####
+
+m14a <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m14b <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m14c <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m14d <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m14e <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m14f <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m14g <- gamm4(propC ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+#####lat + alt + insularity + biome #####
+
+m15a <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness), data = biogeo, REML=TRUE)
+
+m15b <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|effort), REML=TRUE, data = biogeo)
+
+m15c <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|biome), REML=TRUE, data = biogeo)
+
+m15d <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = biogeo)
+
+m15e <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = biogeo)
+
+m15f <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+m15g <- gamm4(propC ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = biogeo)
+
+```
+
+Then, we ranked those models using the corrected Akaike Information Criterion `AICc` to determine the best model(s):
+
+```{r gam_performance, echo=FALSE, message=FALSE, warning=FALSE}
+
+AIClist1 = AICc(m1a$mer,m1b$mer,m1c$mer,m1d$mer,m1e$mer,m1f$mer,m1g$mer,
+             m2a$mer,m2b$mer,m2c$mer,m2d$mer,m2e$mer,m2f$mer,m2g$mer,
+             m3a$mer,m3b$mer,m3c$mer,m3d$mer,m3e$mer,m3f$mer,m3g$mer,
+             m4a$mer,m4b$mer,m4c$mer,m4d$mer,m4e$mer,m4f$mer,m4g$mer,
+             m5a$mer,m5b$mer,m5c$mer,m5d$mer,m5e$mer,m5f$mer,m5g$mer,
+             m6a$mer,m6b$mer,m6c$mer,m6d$mer,m6e$mer,m6f$mer,m6g$mer,
+             m7a$mer,m7b$mer,m7c$mer,m7d$mer,m7e$mer,m7f$mer,m7g$mer,
+             m8a$mer,m8b$mer,m8c$mer,m8d$mer,m8e$mer,m8f$mer,m8g$mer,
+             m9a$mer,m9b$mer,m9c$mer,m9d$mer,m9e$mer,m9f$mer,m9g$mer,
+             m10a$mer,m10b$mer,m10c$mer,m10d$mer,m10e$mer,m10f$mer,m10g$mer,
+             m11a$mer,m11b$mer,m11c$mer,m11d$mer,m11e$mer,m11f$mer,m11g$mer,
+             m12a$mer,m12b$mer,m12c$mer,m12d$mer,m12e$mer,m12f$mer,m12g$mer,
+             m13a$mer,m13b$mer,m13c$mer,m13d$mer,m13e$mer,m13f$mer,m13g$mer)
+
+AIClist2 =  AICc(m14a$mer,m14b$mer,m14c$mer,m14d$mer,m14e$mer,m14f$mer,m14g$mer,
+                 m15a$mer,m15b$mer,m15c$mer,m15d$mer,m15e$mer,m15f$mer,m15g$mer)
+                      
+AIClist <- rbind(AIClist1, AIClist2)
+
+AIClist[order(AIClist$AICc),]
+
+```
+
+It can be seen that models with Latitude and Altitude received the lowest AIC scores. 
+
+
+Models **m5g**, **m5d** , **m5f** and **m5b** are within the $\Delta$AIC < 2 subset, therefore we must examine them.
+
+
+### Latitude + Altitude with Sampling effort, Plant richness and Biome as random effects
+
+```{r bestmodels1, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m5g$gam)
+anova(m5g$gam)
+```
+
+### Latitude + Altitude with Sampling effort and Plant richness as random effects
+```{r bestmodel4, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m5d$gam)
+anova(m5d$gam)
+```
+
+### Latitude + Altitude with Sampling effort and Biome as random effects
+
+```{r bestmodels2, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m5f$gam)
+anova(m5f$gam)
+```
+
+### Latitude + Altitude with Sampling effort as random effect
+```{r bestmodel3, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m5b$gam)
+anova(m5b$gam)
+```
+
+
+Results are quite similar among these four models.
+
+
+
+## Evaluating the performance of variables in explaining the diversity of floral resources
+
+```{r modelperformance1, echo=FALSE, message=FALSE, warning=FALSE}
+
+model_selection_PROP <- model.sel(m1g$mer,m2g$mer,m3g$mer,m4g$mer,m5g$mer,m6g$mer,m7g$mer
+                                  ,m8g$mer,m9g$mer,m10g$mer,m11g$mer,m12g$mer,m13g$mer,
+                                  m14g$mer,m15g$mer)
+
+model_selection_PROP
+```
+
+
+## Visual inspection of these models
+
+```{r residuals, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+
+plot.residuals1 <- getViz(m5g$gam)
+check.gamViz(plot.residuals1)
+
+
+plot.residuals2 <- getViz(m5d$gam)
+check.gamViz(plot.residuals2)
+
+plot.residuals3 <- getViz(m5f$gam)
+check.gamViz(plot.residuals3)
+
+plot.residuals4 <- getViz(m5b$gam)
+check.gamViz(plot.residuals4)
+```
+
+All models seem to have a fair residual distribution
+
+## Assessing multicollinearity
+
+To be sure that our results are not influenced by strong multicollinearity, we performed two tests:
+
+##### **1)** estimating confidence intervals, 
+
+##### **2)** concurvity analysis, using `concurvity`
+
+### Latitude + Altitude with Sampling effort, Plant richness and Biome as random effect
+
+```{r mcol1, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m5g$gam)
+concurvity(m5g$gam)
+```
+
+### Latitude + Altitude with Sampling effort and Plant richness as random effects
+
+```{r mcol2, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m5d$gam)
+concurvity(m5d$gam)
+```
+
+### Latitude + Altitude with Sampling effort as random effect
+
+```{r mcol3, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m5f$gam)
+concurvity(m5f$gam)
+```
+
+### Latitude + Altitude with Sampling effort, Plant richness and Biome as random effects
+
+```{r mcol4, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m5b$gam)
+concurvity(m5b$gam)
+```
+
+Confidence intervals seems reasonable. Also, estimate concurvity is lower than 0.8 which is acceptable.
+
+## Evaluating spatial autocorrelation
+
+```{r spautocorr, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+symbols(biogeo$long, biogeo$lat, circles = biogeo$prop, inches = 0.1)
+```
+
+
+```{r spautocorr2, echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Obtaining residuals from the best models
+
+##Residuals of GAMM
+res1<-residuals(m5g$gam)
+res2<-residuals(m5d$gam)
+res3<-residuals(m5f$gam)
+res4<-residuals(m5b$gam)
+
+##Transforming vectors to overcome some dimensionality problem
+v.res1<-as.vector(res1)
+v.res2<-as.vector(res2)
+v.res3<-as.vector(res3)
+v.res4<-as.vector(res4)
+
+##Residual splines of GAMM
+cres1<-spline.correlog(x=biogeo$long,y=biogeo$lat,z=v.res1, resamp=1000, latlon = T)
+cres2<-spline.correlog(x=biogeo$long,y=biogeo$lat,z=v.res2, resamp=1000, latlon = T)
+cres3<-spline.correlog(x=biogeo$long,y=biogeo$lat,z=v.res3, resamp=1000, latlon = T)
+cres4<-spline.correlog(x=biogeo$long,y=biogeo$lat,z=v.res4, resamp=1000, latlon = T)
+
+
+par(mfrow=c(4,1))
+plot(cres1, xlab="Distance classes",main="(a) m5g")
+plot(cres2, xlab="Distance classes",main="(b) m5d")
+plot(cres3, xlab="Distance classes",main="(c) m5f")
+plot(cres4, xlab="Distance classes",main="(d) m5b")
+par(mfrow=c(1,1))
+```
+
+
+### Mantel partial correlogram
+
+```{r manspautocorr, echo=FALSE, fig.height=6, fig.width=8,  message=FALSE, warning=FALSE}
+longlat<-cbind(biogeo$long,biogeo$lat)
+mdist<-dist(longlat)
+
+#Making distance matrices upon residuals
+mres1<-dist(res1)
+mres2<-dist(res2)
+mres3<-dist(res3)
+mres4<-dist(res4)
+
+mpm_c1<-mpmcorrelogram(mres1,mdist,method="pearson",permutations=10000)
+mpm_c2<-mpmcorrelogram(mres2,mdist,method="pearson",permutations=10000)
+mpm_c3<-mpmcorrelogram(mres3,mdist,method="pearson",permutations=10000)
+mpm_c4<-mpmcorrelogram(mres4,mdist,method="pearson",permutations=10000)
+```
+
+Conclusion: correlograms show no major spatial autocorrelation
+Since model are similar to each other.
+Let's visualize it.
+
+## Plotting the model in 3D
+
+```{r plotbestmodels, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+
+vis.gam(m5g$gam, plot.type = "persp", view=c("lat","alt"), n.grid = 25, color = "terrain", type = "link", nCol = 20, theta = 20.25, phi = 22.5)
+
+```
+
+
+## Results in the global map
+
+```{r resultmap, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+world_map <- map_data("world")
+
+ggplot() + coord_fixed() +
+  xlab("") + ylab("")+
+  geom_polygon(data=world_map, aes(x=long, y=lat, group=group), colour="lemonchiffon4", fill="lemonchiffon4")+
+  geom_point(data = biogeo, 
+             aes(x=long, y=lat, fill = prop, size = alt), color = "black", alpha = 0.85, shape =21)+
+  theme(axis.text = element_text(size=12),
+        axis.title=element_text(size=22), legend.position = "right",
+        legend.title = element_text(size=16), legend.text = element_text(size = 12))+
+  scale_size_continuous(name  ="Altitude (m)")+
+  scale_fill_gradientn(colours = terrain.colors(10), name  ="Nectar-producing \nplants (%)")+
+  scale_y_continuous(breaks=c(-60, -23.5, 0, 23.5, 60))+
+  scale_x_continuous(breaks=c(-180, -90, -30, 0, 30, 90, 180))+
+  geom_hline(yintercept=-23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=0, linetype="dotted", 
+             color = "gray42", size=0.3)
+```
+
+We discuss that the biogeographical trend observed for nectar production in flowering plants across the globe may be a result of the presented resource diversity among global communities.
+Therefore, **temperate communities** may present lower richness and diversity of floral resources than **tropical communities**.
+
+# 2. **Relationship among the Shannon diversity of floral resources  in communities worldwide and biogeographical variables** 
+
+To test this assumption we used a subsample* of our sampled communities and tested whether resource diversity may be a result of the same biogeographical factors
+
+####### ***We used a subsample (n=87) because we were able to track the floral resources richness in only a portion of our sample***
+
+
+## Models
+
+We used the same analytical procedure that was used for the proportion of nectar-producing plants.
+This time, our response variable was Shannon diversity of floral resources _(H')_.
+To assess Shannon diversity of floral resources _(H')_, e considered each type of floral resource (e.g. nectar, oil, pollen, resin, fragrance) as a different "species" following the regular taxonomical use of the Shannon diversity.
+
+We also used the same procedure to check multicollinearity and spatial autocorrelation.
+
+## Multi-model inference
+
+We ran seven possible models for 15 model structures, giving a total of 105 candidate models (not shown in the output).
+
+```{r gammodels1, message=FALSE, warning=FALSE, include=FALSE}
+##Loading data
+div <- read.table("divrec_fixed3.txt", header = T, sep = "\t")
+
+#SHANNON
+#####lat#####
+m1aSH <- gamm4(Shan ~ s(lat), random=~(1|plant_richness), data = div, REML=TRUE)
+
+m1bSH <- gamm4(Shan ~ s(lat), random=~(1|effort), REML=TRUE, data = div)
+
+m1cSH <- gamm4(Shan ~ s(lat), random=~(1|biome), REML=TRUE, data = div)
+
+m1dSH <- gamm4(Shan ~ s(lat), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m1eSH <- gamm4(Shan ~ s(lat), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m1fSH <- gamm4(Shan ~ s(lat), random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m1gSH <- gamm4(Shan ~ s(lat), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####alt#####
+
+m2aSH <- gamm4(Shan ~ s(alt), random=~(1|plant_richness), data = div, REML=TRUE)
+
+m2bSH <- gamm4(Shan ~ s(alt), random=~(1|effort), REML=TRUE, data = div)
+
+m2cSH <- gamm4(Shan ~ s(alt), random=~(1|biome), REML=TRUE, data = div)
+
+m2dSH <- gamm4(Shan ~ s(alt), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m2eSH <- gamm4(Shan ~ s(alt), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m2fSH <- gamm4(Shan ~ s(alt), random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m2gSH <- gamm4(Shan ~ s(alt), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####insularity#####
+
+m3aSH <- gamm4(Shan ~ insularity, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m3bSH <- gamm4(Shan ~ insularity, random=~(1|effort), REML=TRUE, data = div)
+
+m3cSH <- gamm4(Shan ~ insularity, random=~(1|biome), REML=TRUE, data = div)
+
+m3dSH <- gamm4(Shan ~ insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m3eSH <- gamm4(Shan ~ insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m3fSH <- gamm4(Shan ~ insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m3gSH <- gamm4(Shan ~ insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####biome#####
+
+m4aSH <- gamm4(Shan ~ biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m4bSH <- gamm4(Shan ~ biome, random=~(1|effort), REML=TRUE, data = div)
+
+m4cSH <- gamm4(Shan ~ biome, random=~(1|biome), REML=TRUE, data = div)
+
+m4dSH <- gamm4(Shan ~ biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m4eSH <- gamm4(Shan ~ biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m4fSH <- gamm4(Shan ~ biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m4gSH <- gamm4(Shan ~ biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + alt#####
+
+m5aSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|plant_richness), data = div, REML=TRUE)
+
+m5bSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|effort), REML=TRUE, data = div)
+
+m5cSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|biome), REML=TRUE, data = div)
+
+m5dSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m5eSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m5fSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m5gSH <- gamm4(Shan ~ s(lat) + s(alt), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + insularity#####
+
+m6aSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m6bSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|effort), REML=TRUE, data = div)
+
+m6cSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|biome), REML=TRUE, data = div)
+
+m6dSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m6eSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m6fSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m6gSH <- gamm4(Shan ~ s(lat) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + biome#####
+
+m7aSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m7bSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m7cSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m7dSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m7eSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m7fSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m7gSH <- gamm4(Shan ~ s(lat) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####alt + insularity#####
+
+m8aSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m8bSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|effort), REML=TRUE, data = div)
+
+m8cSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|biome), REML=TRUE, data = div)
+
+m8dSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m8eSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m8fSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m8gSH <- gamm4(Shan ~ s(alt) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####alt + biome#####
+
+m9aSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m9bSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m9cSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m9dSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m9eSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m9fSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m9gSH <- gamm4(Shan ~ s(alt) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####insularity + biome#####
+
+m10aSH <- gamm4(Shan ~ insularity + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m10bSH <- gamm4(Shan ~ insularity + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m10cSH <- gamm4(Shan ~ insularity + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m10dSH <- gamm4(Shan ~ insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m10eSH <- gamm4(Shan ~ insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m10fSH <- gamm4(Shan ~ insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m10gSH <- gamm4(Shan ~ insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + alt + insularity#####
+
+m11aSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m11bSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|effort), REML=TRUE, data = div)
+
+m11cSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|biome), REML=TRUE, data = div)
+
+m11dSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m11eSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m11fSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m11gSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + alt + biome#####
+
+m12aSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m12bSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m12cSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m12dSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m12eSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m12fSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m12gSH <- gamm4(Shan ~ s(lat) + s(alt) + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + insularity + biome#####
+
+m13aSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m13bSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m13cSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m13dSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m13eSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m13fSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m13gSH <- gamm4(Shan ~ s(lat) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####alt + insularity + biome#####
+
+m14aSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m14bSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m14cSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m14dSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m14eSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m14fSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m14gSH <- gamm4(Shan ~ s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+#####lat + alt + insularity + biome #####
+
+m15aSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness), data = div, REML=TRUE)
+
+m15bSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|effort), REML=TRUE, data = div)
+
+m15cSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|biome), REML=TRUE, data = div)
+
+m15dSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = div)
+
+m15eSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = div)
+
+m15fSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|effort)+(1|biome), REML=TRUE, data = div)
+
+m15gSH <- gamm4(Shan ~ s(lat) + s(alt) + insularity + biome, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = div)
+
+```
+
+Then, we ranked those models using the corrected Akaike Information Criterion `AICc` to determine the best model(s):
+
+```{r gam_performance1, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+
+
+AIClist1SH = AICc(m1aSH$mer,m1bSH$mer,m1cSH$mer,m1dSH$mer,m1eSH$mer,m1fSH$mer,m1gSH$mer,
+                m2aSH$mer,m2bSH$mer,m2cSH$mer,m2dSH$mer,m2eSH$mer,m2fSH$mer,m2gSH$mer,
+                m3aSH$mer,m3bSH$mer,m3cSH$mer,m3dSH$mer,m3eSH$mer,m3fSH$mer,m3gSH$mer,
+                m4aSH$mer,m4bSH$mer,m4cSH$mer,m4dSH$mer,m4eSH$mer,m4fSH$mer,m4gSH$mer,
+                m5aSH$mer,m5bSH$mer,m5cSH$mer,m5dSH$mer,m5eSH$mer,m5fSH$mer,m5gSH$mer,
+                m6aSH$mer,m6bSH$mer,m6cSH$mer,m6dSH$mer,m6eSH$mer,m6fSH$mer,m6gSH$mer,
+                m7aSH$mer,m7bSH$mer,m7cSH$mer,m7dSH$mer,m7eSH$mer,m7fSH$mer,m7gSH$mer,
+                m8aSH$mer,m8bSH$mer,m8cSH$mer,m8dSH$mer,m8eSH$mer,m8fSH$mer,m8gSH$mer,
+                m9aSH$mer,m9bSH$mer,m9cSH$mer,m9dSH$mer,m9eSH$mer,m9fSH$mer,m9gSH$mer,
+                m10aSH$mer,m10bSH$mer,m10cSH$mer,m10dSH$mer,m10eSH$mer,m10fSH$mer,m10gSH$mer,
+                m11aSH$mer,m11bSH$mer,m11cSH$mer,m11dSH$mer,m11eSH$mer,m11fSH$mer,m11gSH$mer,
+                m12aSH$mer,m12bSH$mer,m12cSH$mer,m12dSH$mer,m12eSH$mer,m12fSH$mer,m12gSH$mer,
+                m13aSH$mer,m13bSH$mer,m13cSH$mer,m13dSH$mer,m13eSH$mer,m13fSH$mer,m13gSH$mer)
+
+AIClist2SH =  AICc(m14aSH$mer,m14bSH$mer,m14cSH$mer,m14dSH$mer,m14eSH$mer,m14fSH$mer,m14gSH$mer,
+                 m15aSH$mer,m15bSH$mer,m15cSH$mer,m15dSH$mer,m15eSH$mer,m15fSH$mer,m15gSH$mer)
+
+AIClistSH <- rbind(AIClist1SH, AIClist2SH)
+
+AIClistSH[order(AIClistSH$AICc),]
+```
+
+It can be seen that models with Latitude or Latitude + Insularity received the lowest AIC scores
+
+Models **m1bSH**, and **m6bSH** are within the $\Delta$AIC < 2 subset, therefore we must examine them
+
+### Latitude with Sampling effort as random effect
+
+```{r bestmodel1SH, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m1bSH$gam)
+anova(m1bSH$gam)
+```
+
+### Latitude + Insularity with Sampling effort as random effects
+
+```{r bestmodel2SH, echo=FALSE, message=FALSE, warning=FALSE}
+summary(m6bSH$gam)
+anova(m6bSH$gam)
+```
+
+
+## Evaluating the performance of variables in explaining the diversity of floral resources
+```{r modelperf2, echo=FALSE, message=FALSE, warning=FALSE}
+model_selection_DIV <- model.sel(m1bSH$mer,m2bSH$mer,m3bSH$mer,m4bSH$mer,m5bSH$mer,
+                                 m6bSH$mer,m7bSH$mer,
+                              m8bSH$mer,m9bSH$mer,m10bSH$mer,m11bSH$mer,
+                              m12bSH$mer,m13bSH$mer, m14bSH$mer,m15bSH$mer)
+model_selection_DIV
+```
+## Visual inspection of these models
+
+```{r residualsSH, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+
+plot.residuals1SH <- getViz(m1bSH$gam)
+check.gamViz(plot.residuals1SH)
+
+
+plot.residuals2SH <- getViz(m6bSH$gam)
+check.gamViz(plot.residuals2SH)
+
+```
+
+All models seem to have a fair residual distribution
+
+## Assessing multicollinearity
+
+
+### Latitude with Sampling effort as random effect
+
+```{r mcol1SH_2, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m1bSH$gam)
+concurvity(m1bSH$gam)
+```
+
+### Latitude + Insularity with Sampling effort as random effects
+
+```{r mcol2SH, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m6bSH$gam)
+concurvity(m6bSH$gam)
+```
+
+
+### Latitude + Altitude with Sampling effort as random effects
+
+```{r mcol23sH, echo=FALSE, message=FALSE, warning=FALSE}
+confint(m5bSH$gam)
+concurvity(m5bSH$gam)
+```
+
+Confidence intervals seems reasonable. Also, estimate concurvity is lower than 0.8 which is acceptable.
+
+## Evaluating spatial autocorrelation
+
+```{r spautocorrSH, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+symbols(div$long, div$lat, circles = div$Shan, inches = 0.1)
+```
+
+
+```{r spautocorr2SH, echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Obtaining residuals from the best models
+
+##Residuals of GAMM
+res1SH<-residuals(m1bSH$gam)
+res2SH<-residuals(m6bSH$gam)
+
+
+##Transforming vectors to overcome some dimensionality problem
+v.res1SH<-as.vector(res1SH)
+v.res2SH<-as.vector(res2SH)
+
+##Residual splines of GAMM
+cres1SH<-spline.correlog(x=div$long,y=div$lat,z=v.res1SH, resamp=1000, latlon = T)
+cres2SH<-spline.correlog(x=div$long,y=div$lat,z=v.res2SH, resamp=1000, latlon = T)
+
+
+par(mfrow=c(2,1))
+plot(cres1, xlab="Distance classes",main="(a) m1bSH")
+plot(cres2, xlab="Distance classes",main="(b) m6bSH")
+par(mfrow=c(1,1))
+
+```
+
+
+### Mantel partial correlogram
+
+```{r manspautocorrSH, echo=FALSE, fig.height=6, fig.width=8,  message=FALSE, warning=FALSE}
+longlat<-cbind(div$long,div$lat)
+mdist<-dist(longlat)
+
+#Making distance matrices upon residuals
+mres1SH<-dist(res1SH)
+mres2SH<-dist(res2SH)
+mpm_c1SH<-mpmcorrelogram(mres1SH,mdist,method="pearson",permutations=10000)
+mpm_c2SH<-mpmcorrelogram(mres2SH,mdist,method="pearson",permutations=10000)
+
+```
+
+Conclusion: correlograms show no spatial autocorrelation
+Since model are similar to each other.
+Let's visualize it.
+
+
+Let's plot it
+
+```{r plotbestmodel1, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+plot(m1bSH$gam)
+```
+
+It behaves extremely contrary to the analysis of the proportion of nectar-producing plants!!
+
+To visually evaluate let's plot the model also including the altitude as predictor variable
+
+```{r plotbestmodel2, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+vis.gam(m5dSH$gam, plot.type = "persp", view=c("lat","alt"), n.grid = 25, color = "terrain", type = "link", nCol = 20, theta = 20.25, phi = 22.5)
+```
+
+
+It seems that Shannon diversity of floral resources exhibit the opposite trend to that observed by the  proportion of nectar producing plants. Let's evaluate if they are negative correlated.
+
+
+```{r correlSProp1, echo=FALSE, message=FALSE, warning=FALSE, fig.width=4, fig.height=4}
+Correl <- read.table("correl.txt", header = T, sep = "\t")
+
+#Response variable transformation
+hist(Correl$prop)
+shapiro.test(Correl$prop)
+
+hist(Correl$Shan)
+shapiro.test(Correl$Shan)
+```
+
+```{r correlSProp2, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+correlation_sh <- cor(Correl[,14:18])
+corrplot(correlation_sh, method="circle")
+```
+
+Well, it is ultra high negative correlated. Let's see the `rho` index through a Spearman correlation test.
+
+
+```{r correlSProp3, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+cor.test(Correl$prop, Correl$Shan, method = "spearman", exact = F)
+```
+
+
+Lets visualize this.
+
+```{r correlSProp4, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+
+ggplot(Correl, aes(x=Shan, y=prop, fill = lat_mol, size = alt))+
+  geom_point(alpha = 0.85, shape = 21)+
+  scale_x_continuous(name="Floral resource diversity")+
+  scale_y_continuous(name="Proportion of\nnectar-producing plants")+
+  scale_fill_gradientn(colours = terrain.colors(10), name="|Latitude|", breaks = c(0,20,40,60,80))+
+  scale_size_continuous(breaks = c(0, 1000, 2000, 3000, 4000), name = "Altitude")+
+  theme_classic(base_size = 12.5,
+           base_family = "",)+
+  theme(legend.position = c(0.855, 0.825),
+        legend.box = "horizontal")+
+  theme(axis.text.x = element_text(color = "black", size=14, angle=0),
+        axis.text.y = element_text(color = "black", size=14, angle=0))+
+  theme(axis.title.x=element_text(size=18),
+        axis.title.y=element_text(size=18))+
+  theme(legend.text=element_text(size=14),
+        legend.title=element_text(size=16))
+
+```
+
+## Results in the global map
+
+```{r resultmap1SH, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+world_map <- map_data("world")
+
+ggplot() + coord_fixed() +
+  xlab("") + ylab("")+
+  geom_polygon(data=world_map, aes(x=long, y=lat, group=group), colour="lemonchiffon4", fill="lemonchiffon4")+
+  geom_point(data = div, 
+             aes(x=long, y=lat, fill = Shan, size = alt), color = "black", alpha = 0.85, shape =21)+
+  theme(axis.text = element_text(size=12),
+        axis.title=element_text(size=22), legend.position = "right",
+        legend.title = element_text(size=16), legend.text = element_text(size = 12))+
+  scale_size_continuous(name  ="Altitude (m)")+
+  scale_fill_gradientn(colours = terrain.colors(10), name  ="Floral resources \ndiversity (H') ") +
+  scale_y_continuous(breaks=c(-60, -23.5, 0, 23.5, 60))+
+  scale_x_continuous(breaks=c(-180, -90, -30, 0, 30, 90, 180))+
+  geom_hline(yintercept=-23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=23.5, linetype="dashed", 
+             color = "grey", size=0.3)+
+  geom_hline(yintercept=0, linetype="dotted", 
+             color = "gray42", size=0.3)
+
+```
+
+
+As biogeographical trends (e.g. diversity and distribution patterns following latitudinal gradients) may reflect Earth's climatic patterns, we also evaluated whether the proportion of nectar producing-plants in communities worldwide as well as their Shannon diversity of floral resources are influnced by climatic variables.
+
+# 3. **Relationship among the Proportion of nectar-producing plants in communities worldwide and environmental variables** 
+
+
+### Correlation among response variables
+
+First we will check if there is correlation between the numeric independent variables
+
+##### **They are:** Mean annual temperature (MAT), Annual precipitation (AP), Evapotranspiration (ET), and vegetation coverage (vegetation index - VI)
+
+
+```{r corr_ENV,  echo=FALSE, message=FALSE, warning=FALSE, fig.align="center"}
+en_biogeo <- read.table("environmental_models2.txt", header = T, sep = "\t")
+
+en_biogeo <- subset(en_biogeo,Tmean_ERA5!='NA')
+
+attach(en_biogeo)
+
+
+#correlation among variables
+
+
+correTmean_ERA5ions <- cor(en_biogeo[,c(15:17, 22)])
+corrplot(correTmean_ERA5ions, method="circle")
+
+
+```
+
+As can be seen here, there are low levels of positive correlation between these variables.
+
+
+## Models
+
+Now, we will check if some environmental variables are related with the proportion of nectar-producing plants in natural plant communities.
+
+We used the same analytical procedure that was used for the 2 abovementioned steps.
+However, we now are using different response variables:
+
+
+##### Mean annual temperature (MAT), Annual precipitation (AP), Evapotranspiration (ET), and vegetation coverage (vegetation index - VI), Plant richness, Biome (according to Whittaker, 1962) and Sampling effort
+
+
+### GAMM models
+
+We will use Generalized Aditive Mixed Models (GAMM) with the function `gamm4`.
+
+
+As mentioned above, we made 105 candidates models by combining the fixed factor, namely, MAT, AP, ET and VI and also combining the random effects, namely, Plant richness, Biome and Sampling effort
+
+
+We used the transformed version of our response variable (proportion of nectar-producing plants) to conform to a normal distribution
+
+
+## Multi-model inference
+
+We ran seven possible models for 15 model structures, giving a total of 105 candidate models (not shown in the output).
+
+
+```{r gammodels_env, message=FALSE, warning=FALSE, include=FALSE}
+
+#Response variable transformation
+propC<-log(prop/(1-prop))
+hist(propC)
+
+
+#####Tmean_ERA5#####
+em1a <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em1b <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em1c <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em1d <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em1e <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em1f <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em1g <- gamm4(propC ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PRCPTOT_ERA5#####
+
+em2a <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em2b <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em2c <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em2d <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em2e <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em2f <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em2g <- gamm4(propC ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PET_ERA5#####
+
+em3a <- gamm4(propC ~ PET_ERA5, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em3b <- gamm4(propC ~ PET_ERA5, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em3c <- gamm4(propC ~ PET_ERA5, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em3d <- gamm4(propC ~ PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em3e <- gamm4(propC ~ PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em3f <- gamm4(propC ~ PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em3g <- gamm4(propC ~ PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####MODIS_NDVI#####
+
+em4a <- gamm4(propC ~ MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em4b <- gamm4(propC ~ MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em4c <- gamm4(propC ~ MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em4d <- gamm4(propC ~ MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em4e <- gamm4(propC ~ MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em4f <- gamm4(propC ~ MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em4g <- gamm4(propC ~ MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5#####
+
+em5a <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em5b <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em5c <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em5d <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em5e <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em5f <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em5g <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PET_ERA5#####
+
+em6a <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em6b <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em6c <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em6d <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em6e <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em6f <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em6g <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + MODIS_NDVI#####
+
+em7a <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em7b <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em7c <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em7d <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em7e <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em7f <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em7g <- gamm4(propC ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PRCPTOT_ERA5 + PET_ERA5#####
+
+em8a <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em8b <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em8c <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em8d <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em8e <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em8f <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em8g <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PRCPTOT_ERA5 + MODIS_NDVI#####
+
+em9a <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em9b <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em9c <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em9d <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em9e <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em9f <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em9g <- gamm4(propC ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PET_ERA5 + MODIS_NDVI#####
+
+em10a <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em10b <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em10c <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em10d <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em10e <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em10f <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em10g <- gamm4(propC ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + PET_ERA5#####
+
+em11a <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em11b <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em11c <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em11d <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em11e <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em11f <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em11g <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + MODIS_NDVI#####
+
+em12a <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em12b <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em12c <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em12d <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em12e <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em12f <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em12g <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PET_ERA5 + MODIS_NDVI#####
+
+em13a <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em13b <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em13c <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em13d <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em13e <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em13f <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em13g <- gamm4(propC ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####PRCPTOT_ERA5 + PET_ERA5 + MODIS_NDVI#####
+
+em14a <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em14b <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em14c <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em14d <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em14e <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em14f <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em14g <- gamm4(propC ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + PET_ERA5 + MODIS_NDVI #####
+
+em15a <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_biogeo, REML=TRUE)
+
+em15b <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_biogeo)
+
+em15c <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_biogeo)
+
+em15d <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_biogeo)
+
+em15e <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em15f <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+
+em15g <- gamm4(propC ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_biogeo)
+```
+
+
+Then, we ranked those models using the corrected Akaike Information Criterion `AICc` to determine the best model(s):
+
+```{r gam_performance_env, echo=FALSE, message=FALSE, warning=FALSE}
+
+AIClist1_env1 = AICc(em1a$mer,em1b$mer,em1c$mer,em1d$mer,em1e$mer,em1f$mer,em1g$mer,
+                em2a$mer,em2b$mer,em2c$mer,em2d$mer,em2e$mer,em2f$mer,em2g$mer,
+                em3a$mer,em3b$mer,em3c$mer,em3d$mer,em3e$mer,em3f$mer,em3g$mer,
+                em4a$mer,em4b$mer,em4c$mer,em4d$mer,em4e$mer,em4f$mer,em4g$mer,
+                em5a$mer,em5b$mer,em5c$mer,em5d$mer,em5e$mer,em5f$mer,em5g$mer,
+                em6a$mer,em6b$mer,em6c$mer,em6d$mer,em6e$mer,em6f$mer,em6g$mer,
+                em7a$mer,em7b$mer,em7c$mer,em7d$mer,em7e$mer,em7f$mer,em7g$mer,
+                em8a$mer,em8b$mer,em8c$mer,em8d$mer,em8e$mer,em8f$mer,em8g$mer,
+                em9a$mer,em9b$mer,em9c$mer,em9d$mer,em9e$mer,em9f$mer,em9g$mer,
+                em10a$mer,em10b$mer,em10c$mer,em10d$mer,em10e$mer,em10f$mer,em10g$mer,
+                em11a$mer,em11b$mer,em11c$mer,em11d$mer,em11e$mer,em11f$mer,em11g$mer,
+                em12a$mer,em12b$mer,em12c$mer,em12d$mer,em12e$mer,em12f$mer,em12g$mer,
+                em13a$mer,em13b$mer,em13c$mer,em13d$mer,em13e$mer,em13f$mer,em13g$mer)
+
+AIClist1_env2 =  AICc(em14a$mer,em14b$mer,em14c$mer,em14d$mer,em14e$mer,em14f$mer,em14g$mer,
+                 em15a$mer,em15b$mer,em15c$mer,em15d$mer,em15e$mer,em15f$mer,em15g$mer)
+
+AIClist_envP <- rbind(AIClist1_env1, AIClist1_env2)
+
+AIClist_envP[order(AIClist_envP$AICc),]
+
+```
+
+It can be seen that models with MAT received the lowest AIC scores.  
+
+
+Model **m1f**, **m1g** and **m1c** are within the $\Delta$AIC < 2 subset, we must examine them.
+
+
+### MAT with Sampling effort, and Biome as random effects
+
+```{r bestmodels1_env, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em1f$gam)
+anova(em1f$gam)
+```
+
+
+
+### MAT with Sampling effort, Plant richness and Biome as random effects
+
+```{r bestmodels2_env2, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em1g$gam)
+anova(em1g$gam)
+```
+
+### MAT with  Biome as random effects
+
+```{r bestmodels3_env3, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em1c$gam)
+anova(em1c$gam)
+```
+
+
+
+## Evaluating the performance of variables in explaining the diversity of floral resources
+
+```{r modelperformance_env, echo=FALSE, message=FALSE, warning=FALSE}
+model_selection_PROP_en <- model.sel(em1f$mer,em2f$mer,em3f$mer,em4f$mer,em5f$mer,em6f$mer
+                                  ,em7f$mer,em8f$mer,em9f$mer,em10f$mer,em11f$mer
+                                  ,em12f$mer,em13f$mer,
+                                  em14f$mer,em15f$mer)
+model_selection_PROP_en
+```
+
+## Visual inspection of the model
+
+```{r residuals_env_2, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+
+plot.residuals1en <- getViz(em1f$gam)
+check.gamViz(plot.residuals1en)
+
+plot.residuals2en <- getViz(em1g$gam)
+check.gamViz(plot.residuals1en)
+
+plot.residuals3en <- getViz(em1c$gam)
+check.gamViz(plot.residuals1en)
+```
+
+
+All models seem to have a fair residual distribution
+
+## Assessing multicollinearity
+
+
+### MAT with Sampling effort and Biome as random effect
+
+```{r mcol1SH, echo=FALSE, message=FALSE, warning=FALSE}
+confint(em5f$gam)
+concurvity(em5f$gam)
+
+```
+
+
+Confidence intervals seems reasonable. Also, estimate concurvity is lower than 0.8 which is acceptable.
+
+## Evaluating spatial autocorrelation
+
+
+```{r spautocorr2_env, echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Obtaining residuals from the best models
+
+##Residuals of GAMM
+res1e<-residuals(em1f$gam)
+res2e<-residuals(em1g$gam)
+res3e<-residuals(em1c$gam)
+
+
+##Transforming vectors to overcome some dimensionality problem
+v.res1e<-as.vector(res1e)
+v.res2e<-as.vector(res2e)
+v.res3e<-as.vector(res3e)
+
+##Residual splines of GAMM
+cres1e<-spline.correlog(x=long,y=lat,z=v.res1e, resamp=1000, latlon = T)
+cres2e<-spline.correlog(x=long,y=lat,z=v.res2e, resamp=1000, latlon = T)
+cres3e<-spline.correlog(x=long,y=lat,z=v.res3e, resamp=1000, latlon = T)
+
+plot(cres1e, xlab="Distance classes",main="(a) m1f")
+plot(cres2e, xlab="Distance classes",main="(a) m1g")
+plot(cres3e, xlab="Distance classes",main="(a) m1c")
+```
+
+
+### Mantel partial correlogram
+
+```{r manspautocorr_env_a, echo=FALSE, fig.height=6, fig.width=8,  message=FALSE, warning=FALSE}
+longlate<-cbind(en_biogeo$long,en_biogeo$lat)
+mdiste<-dist(longlate)
+
+#Making distance matrices upon residuals
+mres1e<-dist(res1e)
+mres2e<-dist(res2e)
+mres3e<-dist(res3e)
+
+mpm_c1e<-mpmcorrelogram(mres1e,mdiste,method="pearson",permutations=10000)
+mpm_c2e<-mpmcorrelogram(mres2e,mdiste,method="pearson",permutations=10000)
+mpm_c3e<-mpmcorrelogram(mres3e,mdiste,method="pearson",permutations=10000)
+
+```
+
+Conclusion: correlograms show some spatial autocorrelation in the first distant classes, but not something big that affect our conclusions.
+
+
+Let's plot it
+
+```{r plotbestmodel_env, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+ggplot(en_biogeo, aes(x=Tmean_ERA5, y = prop, fill = Tmean_ERA5, size = PRCPTOT_ERA5))+
+  geom_smooth(method = "gam", color = "black", se = T, 
+              show.legend =F)+
+  geom_point(alpha = 0.85, shape = 21)+
+  scale_x_continuous(name="Mean annual temperature (ºC)")+
+  scale_y_continuous(name="Proportion of\nnectar-producing plants")+
+  scale_fill_gradientn(colours = terrain.colors(10), name="MAT", breaks = c(-10, 0, 10, 20, 30, 40))+
+  scale_size_continuous(breaks = c(0, 500, 1000, 2000, 3000, 4000), name = "AP")+
+  theme_classic(base_size = 12.5,
+                base_family = "",)+
+  theme(legend.position = c(0.155, 0.225),
+        legend.box = "horizontal")+
+  theme(axis.text.x = element_text(color = "black", size=14, angle=0),
+        axis.text.y = element_text(color = "black", size=14, angle=0))+
+  theme(axis.title.x=element_text(size=18),
+        axis.title.y=element_text(size=18))+
+  theme(legend.text=element_text(size=14),
+        legend.title=element_text(size=16))
+
+```
+
+# 4. **Relationship among the Shannon diversity of floral resources in communities worldwide and environmental variables** 
+
+
+We used the same analytical procedure that was used for the proportion of nectar-producing plants.
+This time, our response variable was Shannon diversity of floral resources _(H')_.
+To assess Shannon diversity of floral resources _(H')_, e considered each type of floral resource (e.g. nectar, oil, pollen, resin, fragrance) as a different "species" following the regular taxonomical use of the Shannon diversity.
+
+We also used the same procedure to check multicollinearity and spatial autocorrelation.  
+
+
+## Multi-model inference
+
+We ran seven possible models for 15 model structures, giving a total of 105 candidate models (not shown in the output).
+
+
+```{r gammodels_envSH, message=FALSE, warning=FALSE, include=FALSE}
+
+en_div <- read.table("environmental_divrec.txt", header = T, sep = "\t")
+attach(en_div)
+
+
+
+
+#SHANNON
+#####Tmean_ERA5#####
+em1aSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em1bSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|effort), REML=TRUE, data = en_div)
+
+em1cSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|biome), REML=TRUE, data = en_div)
+
+em1dSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em1eSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em1fSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em1gSH <- gamm4(Shan ~ s(Tmean_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PRCPTOT_ERA5#####
+
+em2aSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em2bSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|effort), REML=TRUE, data = en_div)
+
+em2cSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|biome), REML=TRUE, data = en_div)
+
+em2dSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em2eSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em2fSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em2gSH <- gamm4(Shan ~ s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PET_ERA5#####
+
+em3aSH <- gamm4(Shan ~ PET_ERA5, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em3bSH <- gamm4(Shan ~ PET_ERA5, random=~(1|effort), REML=TRUE, data = en_div)
+
+em3cSH <- gamm4(Shan ~ PET_ERA5, random=~(1|biome), REML=TRUE, data = en_div)
+
+em3dSH <- gamm4(Shan ~ PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em3eSH <- gamm4(Shan ~ PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em3fSH <- gamm4(Shan ~ PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em3gSH <- gamm4(Shan ~ PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####MODIS_NDVI#####
+
+em4aSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em4bSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em4cSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em4dSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em4eSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em4fSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em4gSH <- gamm4(Shan ~ MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5#####
+
+em5aSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em5bSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|effort), REML=TRUE, data = en_div)
+
+em5cSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|biome), REML=TRUE, data = en_div)
+
+em5dSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em5eSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em5fSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em5gSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5), random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PET_ERA5#####
+
+em6aSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em6bSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_div)
+
+em6cSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_div)
+
+em6dSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em6eSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em6fSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em6gSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + MODIS_NDVI#####
+
+em7aSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em7bSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em7cSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em7dSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em7eSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em7fSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em7gSH <- gamm4(Shan ~ s(Tmean_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PRCPTOT_ERA5 + PET_ERA5#####
+
+em8aSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em8bSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_div)
+
+em8cSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_div)
+
+em8dSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em8eSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em8fSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em8gSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PRCPTOT_ERA5 + MODIS_NDVI#####
+
+em9aSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em9bSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em9cSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em9dSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em9eSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em9fSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em9gSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PET_ERA5 + MODIS_NDVI#####
+
+em10aSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em10bSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em10cSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em10dSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em10eSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em10fSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em10gSH <- gamm4(Shan ~ PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + PET_ERA5#####
+
+em11aSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em11bSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort), REML=TRUE, data = en_div)
+
+em11cSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|biome), REML=TRUE, data = en_div)
+
+em11dSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em11eSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em11fSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em11gSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + MODIS_NDVI#####
+
+em12aSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em12bSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em12cSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em12dSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em12eSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em12fSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em12gSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PET_ERA5 + MODIS_NDVI#####
+
+em13aSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em13bSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em13cSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em13dSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em13eSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em13fSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em13gSH <- gamm4(Shan ~ s(Tmean_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####PRCPTOT_ERA5 + PET_ERA5 + MODIS_NDVI#####
+
+em14aSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em14bSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em14cSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em14dSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em14eSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em14fSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em14gSH <- gamm4(Shan ~ s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+#####Tmean_ERA5 + PRCPTOT_ERA5 + PET_ERA5 + MODIS_NDVI #####
+
+em15aSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness), data = en_div, REML=TRUE)
+
+em15bSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort), REML=TRUE, data = en_div)
+
+em15cSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|biome), REML=TRUE, data = en_div)
+
+em15dSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort), REML=TRUE, data = en_div)
+
+em15eSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|biome), REML=TRUE, data = en_div)
+
+em15fSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+em15gSH <- gamm4(Shan ~ s(Tmean_ERA5) + s(PRCPTOT_ERA5) + PET_ERA5 + MODIS_NDVI, random=~(1|plant_richness)+(1|effort)+(1|biome), REML=TRUE, data = en_div)
+
+
+``` 
+
+
+Then, we ranked those models using the corrected Akaike Information Criterion `AICc` to determine the best model(s):
+
+```{r gam_performance_env_SH, echo=FALSE, message=FALSE, warning=FALSE}
+AIClist1SH_env = AICc(em1aSH$mer,em1bSH$mer,em1cSH$mer,em1dSH$mer,em1eSH$mer,em1fSH$mer
+                  ,em1gSH$mer,em2aSH$mer,em2bSH$mer,em2cSH$mer,em2dSH$mer,em2eSH$mer
+                  ,em2fSH$mer,em2gSH$mer,em3aSH$mer,em3bSH$mer,em3cSH$mer,em3dSH$mer
+                  ,em3eSH$mer,em3fSH$mer,em3gSH$mer,em4aSH$mer,em4bSH$mer,em4cSH$mer
+                  ,em4dSH$mer,em4eSH$mer,em4fSH$mer,em4gSH$mer,em5aSH$mer,em5bSH$mer
+                  ,em5cSH$mer,em5dSH$mer,em5eSH$mer,em5fSH$mer,em5gSH$mer,em6aSH$mer
+                  ,em6bSH$mer,em6cSH$mer,em6dSH$mer,em6eSH$mer,em6fSH$mer,em6gSH$mer
+                  ,em7aSH$mer,em7bSH$mer,em7cSH$mer,em7dSH$mer,em7eSH$mer,em7fSH$mer
+                  ,em7gSH$mer,em8aSH$mer,em8bSH$mer,em8cSH$mer,em8dSH$mer,em8eSH$mer
+                  ,em8fSH$mer,em8gSH$mer,em9aSH$mer,em9bSH$mer,em9cSH$mer,em9dSH$mer
+                  ,em9eSH$mer,em9fSH$mer,em9gSH$mer,em10aSH$mer,em10bSH$mer
+                  ,em10cSH$mer,em10dSH$mer,em10eSH$mer,em10fSH$mer,em10gSH$mer
+                  ,em11aSH$mer,em11bSH$mer,em11cSH$mer,em11dSH$mer,em11eSH$mer
+                  ,em11fSH$mer,em11gSH$mer,em12aSH$mer,em12bSH$mer,em12cSH$mer
+                  ,em12dSH$mer,em12eSH$mer,em12fSH$mer,em12gSH$mer,em13aSH$mer
+                  ,em13bSH$mer,em13cSH$mer,em13dSH$mer,em13eSH$mer,em13fSH$mer
+                  ,em13gSH$mer)
+
+AIClist2SH_env =  AICc(em14aSH$mer,em14bSH$mer,em14cSH$mer,em14dSH$mer,em14eSH$mer,em14fSH$mer,em14gSH$mer,
+                   em15aSH$mer,em15bSH$mer,em15cSH$mer,em15dSH$mer,em15eSH$mer,em15fSH$mer,em15gSH$mer)
+
+AIClistSH_env <- rbind(AIClist1SH_env, AIClist2SH_env)
+
+AIClistSH_env[order(AIClistSH_env$AICc),]
+```
+
+It can be seen that models with MAT received the lowest AIC scores.  
+
+
+Models **m5b**, **m5a**, and **m5c** received scores within the $\Delta$AIC < 2 subset, let's examine them.  
+
+
+### MAT + AP with Sampling effort as random effect
+
+```{r bestmodels1_env_SH, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em5bSH$gam)
+anova(em5bSH$gam)
+```
+
+
+### MAT + AP with Plant richness as random effect
+
+```{r bestmodels2_env_SH, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em5aSH$gam)
+anova(em5aSH$gam)
+```
+
+
+
+### MAT + AP with Biome as random effect
+
+```{r bestmodels3_env_SH, echo=FALSE, message=FALSE, warning=FALSE}
+summary(em5cSH$gam)
+anova(em5cSH$gam)
+```
+
+
+## Evaluating the performance of variables in explaining the diversity of floral resources
+
+```{r modelperformance_env_SH, echo=FALSE, message=FALSE, warning=FALSE}
+model_selection_DIV_en <- model.sel(em1bSH$mer,em2bSH$mer,em3bSH$mer,em4bSH$mer,em5bSH$mer,em6bSH$mer,em7bSH$mer,em8bSH$mer,em9bSH$mer,em10bSH$mer,em11bSH$mer,em12bSH$mer,em13bSH$mer, em14bSH$mer,em15bSH$mer)
+model_selection_DIV_en
+```
+
+## Visual inspection of the model
+
+```{r residuals_env_SH, echo=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+
+plot.residuals1en_SH <- getViz(em5bSH$gam)
+check.gamViz(plot.residuals1en_SH)
+
+plot.residuals2en_SH <- getViz(em5aSH$gam)
+check.gamViz(plot.residuals2en_SH)
+
+plot.residuals3en_SH <- getViz(em5cSH$gam)
+check.gamViz(plot.residuals3en_SH)
+
+```
+
+
+All models seem to have a fair residual distribution
+
+## Assessing multicollinearity
+
+
+### MAT + AP with Sampling effort as random effect
+
+```{r mcol1SH_ENV, echo=FALSE, message=FALSE, warning=FALSE}
+confint(em5bSH$gam)
+concurvity(em5bSH$gam)
+```
+
+
+Confidence intervals seems reasonable. Also, estimate concurvity is lower than 0.8 which is acceptable.
+
+## Evaluating spatial autocorrelation
+
+```{r spautocorr2_env_SH, echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Obtaining residuals from the best models
+
+##Residuals of GAMM
+res1eSH<-residuals(em5bSH$gam)
+res2eSH<-residuals(em5aSH$gam)
+res3eSH<-residuals(em5cSH$gam)
+
+##Transforming vectors to overcome some dimensionality problem
+v.res1eSH<-as.vector(res1eSH)
+v.res2eSH<-as.vector(res2eSH)
+v.res3eSH<-as.vector(res3eSH)
+
+##Residual splines of GAMM
+cres1eSH<-spline.correlog(x=long,y=lat,z=v.res1eSH, resamp=1000, latlon = T)
+cres2eSH<-spline.correlog(x=long,y=lat,z=v.res2eSH, resamp=1000, latlon = T)
+cres3eSH<-spline.correlog(x=long,y=lat,z=v.res3eSH, resamp=1000, latlon = T)
+
+
+par(mfrow=c(3,1))
+plot(cres1eSH, xlab="Distance classes",main="(a) m5b")
+plot(cres2eSH, xlab="Distance classes",main="(b) m5a")
+plot(cres3eSH, xlab="Distance classes",main="(c) m5c")
+par(mfrow=c(1,1))
+
+```
+
+
+### Mantel partial correlogram
+
+```{r manspautocorr_env_SH, echo=FALSE, fig.height=6, fig.width=8,  message=FALSE, warning=FALSE}
+longlateSH<-cbind(en_div$long,en_div$lat)
+mdisteSH<-dist(longlateSH)
+
+#Making distance matrices upon residuals
+mres1esh<-dist(res1eSH)
+mres2esh<-dist(res2eSH)
+mres3esh<-dist(res3eSH)
+
+
+mpm_c1eSH<-mpmcorrelogram(mres1esh,mdisteSH,method="pearson",permutations=10000)
+mpm_c2eSH<-mpmcorrelogram(mres2esh,mdisteSH,method="pearson",permutations=10000)
+mpm_c3eSH<-mpmcorrelogram(mres3esh,mdisteSH,method="pearson",permutations=10000)
+
+
+```
+
+Conclusion: correlograms show NO spatial autocorrelation 
+
+
+Let's plot it
+
+```{r plotbestmodel_env_SH, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+ggplot(en_div, aes(x=Tmean_ERA5, y = Shan, fill = Tmean_ERA5, size = PRCPTOT_ERA5))+
+  geom_smooth(method = "gam", color = "black", se = T, 
+              show.legend = F)+
+  geom_point(alpha = 0.85, shape = 21)+
+  scale_x_continuous(name="Mean annual temperature (ºC)", breaks = c(-20,-10, 0, 10, 20, 30, 40))+
+  scale_y_continuous(name="Floral resource diversity")+
+  scale_fill_gradientn(colours = terrain.colors(10), name="MAT", breaks = c(-20,-10, 0, 10, 20, 30, 40))+
+  scale_size_continuous(breaks = c(0, 500, 1000, 2000, 3000, 4000), name = "AP")+
+  theme_classic(base_size = 12.5,
+                base_family = "",)+
+  theme(legend.position = c(0.155, 0.855),
+        legend.box = "horizontal")+
+  theme(axis.text.x = element_text(color = "black", size=14, angle=0),
+        axis.text.y = element_text(color = "black", size=14, angle=0))+
+  theme(axis.title.x=element_text(size=18),
+        axis.title.y=element_text(size=18))+
+  theme(legend.text=element_text(size=14),
+        legend.title=element_text(size=16))
+
+
+```
+
+
+## Session
+
+```{r session, echo=T}
+sessionInfo()
+```
